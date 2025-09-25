@@ -37,11 +37,34 @@ namespace xten
             XX(QueueFailedKey)
             XX(QueueFailedSharedMemory)
             XX(QueueParameterInvaild)
+            XX(QueueNoFreeSize)
+            XX(QueueDataError)
+            XX(QueueDataLengthError)
+            XX(QueueBufferLengthInsufficient)
 #undef XX
         default:
             break;
         }
         return "ShmQueueErrorCode=UnKnown";
+    }
+    //访问模式转string
+    static const char *vtModel2String(EnumVisitModel mod)
+    {
+        switch (mod)
+        {
+#define XX(mod)               \
+    case EnumVisitModel::mod: \
+        return #mod;          \
+        break;
+            XX(SinglePushSinglePop)
+            XX(SinglePushMulitPop)
+            XX(MulitPushSinglePop)
+            XX(MulitPushMulitPop)
+#undef XX
+        default:
+            break;
+        }
+        return "UnKnownVtModel";
     }
     // 构造函数
     ShmQueue::ShmQueue(key_t key, size_t quesize, int shmId, void *shmPtr,
@@ -100,6 +123,7 @@ namespace xten
         if (freeSize < msglength + sizeof(DATA_SIZE_TYPE))
         {
             // log
+            std::cout<<"PushMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueNoFreeSize);
             return (int)(ShmQueErrorCode::QueueNoFreeSize);
         }
         // 2.确保了空间足够，开始放数据
@@ -110,26 +134,92 @@ namespace xten
         for (int i = 0; i < sizeof(DATA_SIZE_TYPE); i++)
         {
             tmpDst[tmptail] = tmpLen[i];
-            tmptail = (tmptail + 1) & (_controlBlock->queSize-1); // 存长度空间可能在头尾
+            tmptail = (tmptail + 1) & (_controlBlock->queSize - 1); // 存长度空间可能在头尾
         }
         // 2.2放msg----有两种情况  连续 or 头尾
         DATA_SIZE_TYPE part1Size = std::min(msglength, _controlBlock->queSize - _controlBlock->tailIdx);
         memcpy((void *)(tmpDst + tmptail), msg, (size_t)part1Size);
-        DATA_SIZE_TYPE part2Size=msglength-part1Size;
-        if(part2Size>0)
+        DATA_SIZE_TYPE part2Size = msglength - part1Size;
+        if (part2Size > 0)
         {
-            //数据在头尾----直接在队列起始位置放下剩余数据
-            memcpy((void*)(tmpDst),(const void*)((BYTE*)msg+part1Size), (size_t)(part2Size));
+            // 数据在头尾----直接在队列起始位置放下剩余数据
+            memcpy((void *)(tmpDst), (const void *)((BYTE *)msg + part1Size), (size_t)(part2Size));
         }
-        //3.数据拷贝完---更新索引位置 [在更新索引位置之前，需要保证数据全部写入完毕，使用写内存屏障保障]
+        // 3.数据拷贝完---更新索引位置 [在更新索引位置之前，需要保证数据全部写入完毕，使用写内存屏障保障]
         sfence();
-        //更新tail索引
-        _controlBlock->tailIdx=(tmptail+msglength) & (_controlBlock->queSize-1);
+        // 更新tail索引
+        _controlBlock->tailIdx = (tmptail + msglength) & (_controlBlock->queSize - 1);
         return (int)(ShmQueErrorCode::QueueOk);
     }
     // 取出消息
     int ShmQueue::PopMessage(void *buffer, size_t bufLength)
     {
+        if (!buffer || bufLength <= 0)
+        {
+            std::cout << errorCode2String(ShmQueErrorCode::QueueParameterInvaild) << std::endl;
+            return (int)(ShmQueErrorCode::QueueParameterInvaild);
+        }
+        // 锁
+        WLockGuard lock(_headMtx);
+        size_t dataSize = getDataSize();
+        if (dataSize == 0)
+        {
+            // 没有数据
+            return (int)(ShmQueErrorCode::QueueOk);
+        }
+        if (dataSize <= sizeof(DATA_SIZE_TYPE))
+        {
+            // 数据长度小于存储长度的固定字段
+            //  log
+            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueDataError);
+            // 打印一下队列的info
+            std::cout<<PrintShmQueInfo();
+            // 修复一下错误---清空数据进行修复
+            _controlBlock->headIdx = _controlBlock->tailIdx;
+            return (int)(ShmQueErrorCode::QueueDataError);
+        }
+        // 1.拿到长度字段
+        DATA_SIZE_TYPE tmpLength;
+        BYTE *tmpSrc = _quePtr;
+        int tmphead = _controlBlock->headIdx;
+        for (int i = 0; i < sizeof(DATA_SIZE_TYPE); i++)
+        {
+            // 生产消费一定在同一台主机上---不需要考虑大小端问题
+            ((BYTE *)(&tmpLength))[i] = tmpSrc[tmphead];
+            tmphead = (tmphead + 1) & (_controlBlock->queSize - 1); // 可能在头尾
+        }
+        // 2.判断长度字段是否合法
+        if (tmpLength <= 0 || tmpLength > dataSize - sizeof(DATA_SIZE_TYPE))
+        {
+            // log
+            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueDataLengthError);
+            // 打印队列信息
+            std::cout<<PrintShmQueInfo();
+            // 非法长度---清空数据进行修复
+            _controlBlock->headIdx = _controlBlock->tailIdx;
+            return (int)(ShmQueErrorCode::QueueDataLengthError);
+        }
+        if (tmpLength > bufLength)
+        {
+            // 传入缓冲区大小不足
+            // log
+            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueBufferLengthInsufficient);
+            return (int)(ShmQueErrorCode::QueueBufferLengthInsufficient);
+        }
+        // 缓冲区大小足够---开始获取data
+        DATA_SIZE_TYPE part1Size = std::min(tmpLength, _controlBlock->queSize - _controlBlock->headIdx);
+        memcpy(buffer, (const void *)(tmpSrc + tmphead), (size_t)part1Size);
+        DATA_SIZE_TYPE part2Size = tmpLength - part1Size;
+        if (part2Size > 0)
+        {
+            // 数据分布在头尾
+            memcpy((void *)((BYTE *)(buffer) + part1Size), (const void *)(tmpSrc), part2Size);
+        }
+        // 消息Pop完毕，修改head索引前先要保证数据全部Pop完毕，使用写内存屏障保证
+        sfence();
+        // 修改head索引
+        _controlBlock->headIdx = (tmphead + tmpLength) & (_controlBlock->queSize - 1);
+        return tmpLength;
     }
     // 获取消息拷贝---不改变索引位置
     int ShmQueue::PeekHeadMessage(void *buffer, size_t bufLength)
@@ -157,16 +247,22 @@ namespace xten
         }
     }
     // 获取空闲空间大小
-    size_t ShmQueue::getFreeSize()
+    size_t ShmQueue::getFreeSize() const
     {
         if (_controlBlock->headIdx <= _controlBlock->tailIdx)
         {
             return _controlBlock->queSize - (_controlBlock->tailIdx - _controlBlock->headIdx) - REMAIN_SIZE;
         }
-        else
+        return _controlBlock->headIdx - _controlBlock->tailIdx - REMAIN_SIZE;
+    }
+    // 获取数据大小
+    size_t ShmQueue::getDataSize() const
+    {
+        if (_controlBlock->tailIdx > _controlBlock->headIdx)
         {
-            return _controlBlock->headIdx - _controlBlock->tailIdx - REMAIN_SIZE;
+            return _controlBlock->tailIdx - _controlBlock->headIdx;
         }
+        return _controlBlock->queSize - (_controlBlock->headIdx - _controlBlock->tailIdx);
     }
     // 删除共享内存--detach
     bool ShmQueue::destroySharedMemory(void *shmPtr, key_t key)
@@ -333,7 +429,45 @@ namespace xten
     std::string ShmQueue::PrintShmQueInfo() const
     {
         std::stringstream ss;
-        // ss<<"test";
+        // 基本信息
+        ss << "=== 共享内存队列信息 ===" << std::endl;
+        ss << "Key: " << _controlBlock->key << std::endl;
+        ss << "队列大小: " << _controlBlock->queSize << " bytes" << std::endl;
+        ss << "Head索引: " << _controlBlock->headIdx << std::endl;
+        ss << "Tail索引: " << _controlBlock->tailIdx << std::endl;
+        ss << "访问模式: " << vtModel2String(_controlBlock->vtModule) << std::endl;
+        ss << "创建模式: " << ((_newOrLink == EnumCreateModel::NewShmQue) ? "NewShmQue" : "LinkShmQue") << std::endl;
+
+        // 图形化显示队列状态
+        ss << "=== 队列状态图 ===" << std::endl;
+        // 计算数据大小和空闲空间
+        size_t dataSize = getDataSize();
+        size_t freeSize = getFreeSize();
+        ss << "数据大小: " << dataSize << " bytes" << std::endl;
+        ss << "空闲空间: " << freeSize << " bytes" << std::endl;
+        ss << "保留空间: " << REMAIN_SIZE << " bytes" << std::endl;
+
+        const size_t displayWidth = 50; // 显示宽度
+        // 更详细的队列状态图 (显示head和tail的相对位置)
+        ss << "=== 详细队列布局 ===" << std::endl;
+        ss << "[";
+        for (size_t i = 0; i < displayWidth; ++i)
+        {
+            size_t pos = (i * _controlBlock->queSize) / displayWidth;
+            if (pos == _controlBlock->headIdx)
+                ss << "H"; // Head位置
+            else if (pos == _controlBlock->tailIdx)
+                ss << "T"; // Tail位置
+            else if ((_controlBlock->headIdx < _controlBlock->tailIdx &&
+                      pos > _controlBlock->headIdx && pos < _controlBlock->tailIdx) ||
+                     (_controlBlock->headIdx > _controlBlock->tailIdx &&
+                      (pos > _controlBlock->headIdx || pos < _controlBlock->tailIdx)))
+                ss << "#"; // 数据区域
+            else
+                ss << "."; // 空闲区域
+        }
+        ss << "]\n"
+           << std::endl;
         return ss.str();
     }
     std::ostream &operator<<(std::ostream &os, const ShmQueue &queue)

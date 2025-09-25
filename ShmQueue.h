@@ -52,6 +52,9 @@ namespace xten
         QueueFailedSharedMemory = -2, // 获取共享内存失败
         QueueParameterInvaild=-3, //参数错误
         QueueNoFreeSize=-4, //无剩余空间
+        QueueDataError=-5, //数据长度字段不足
+        QueueDataLengthError=-6, //数据长度字段有错
+        QueueBufferLengthInsufficient=-7, //获取消息时缓冲区长度不足
     };
     class ALIGNED_CACHELINE_SIZE ShmQueue : public nocopyable
     {
@@ -98,11 +101,11 @@ namespace xten
 
         // 放入消息 on succecss ret=0 ; on failed ret<0
         int PushMessage(const void *msg, DATA_SIZE_TYPE msglength);
-        // 取出消息 on succecss ret=0 ; on failed ret<0
+        // 取出消息 on succecss ret=sizeof(message) ; on failed ret<0
         int PopMessage(void *buffer, size_t bufLength);
-        // 获取头部消息拷贝---不改变索引位置 on succecss ret=0 ; on failed ret<0
+        // 获取头部消息拷贝---不改变索引位置 on succecss ret=sizeof(message) ; on failed ret<0
         int PeekHeadMessage(void *buffer, size_t bufLength);
-        // 删除头部消息---改变索引位置 on succecss ret=0 ; on failed ret<0
+        // 删除头部消息---改变索引位置 on succecss ret=sizeof(message) ; on failed ret<0
         int DelHeadMessage();
         // 打印共享内存消息队列的属性信息
         std::string PrintShmQueInfo() const;
@@ -118,7 +121,9 @@ namespace xten
         // 根据访问模式决定锁的init
         void initLock();
         // 获取空闲空间的大小
-        size_t getFreeSize();
+        size_t getFreeSize() const;
+        // 获取数据大小
+        size_t getDataSize() const;
     private:
         ShmQueControlBlock *_controlBlock; // 头部控制块地址
         void *_shmPtr;                     // 共享内存起始地址
