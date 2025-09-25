@@ -41,13 +41,17 @@ int main()
         // }
         // printf("Semaphore %d value: %d\n", i, val);
     // }
-    xten::ShmQueue::ptr x1=xten::ShmQueue::GetShmQueuePtr("/tmp",10,17239,xten::EnumVisitModel::MulitPushMulitPop);
+    xten::ShmQueue::ptr x1=xten::ShmQueue::GetShmQueuePtr("/tmp",10,25,xten::EnumVisitModel::MulitPushMulitPop);
     std::cout<<x1->GetQueueSize()<<std::endl;
-    xten::ShmQueue::ShmQueControlBlock block;
-    x1->PushMessage("data",100);
-    x1->PopMessage();
-    x1->PeekHeadMessage();
-    x1->DelHeadMessage();
+    // xten::ShmQueue::ShmQueControlBlock block;
+    // queSize==32
+    int ret1=x1->PushMessage("data",4);
+    int ret2=x1->PushMessage("test",4);
+    int ret3=x1->PushMessage("duck",4);
+    std::cout<<ret1<<ret2<<ret3<<std::endl;
+    // x1->PopMessage();
+    // x1->PeekHeadMessage();
+    // x1->DelHeadMessage();
     std::cout<<*x1<<std::endl;
     // auto x2=xten::ShmQueue<void,0>::GetInstance();
     // auto x3=xten::ShmQueue<void,1>::GetInstance();

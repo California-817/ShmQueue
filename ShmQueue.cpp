@@ -34,7 +34,9 @@ namespace xten
     case ShmQueErrorCode::CODE:            \
         return "ShmQueueErrorCode=" #CODE; \
         break;
-            XX(FailedKey);
+            XX(QueueFailedKey)
+            XX(QueueFailedSharedMemory)
+            XX(QueueParameterInvaild)
 #undef XX
         default:
             break;
@@ -86,6 +88,44 @@ namespace xten
     // 放入消息
     int ShmQueue::PushMessage(const void *msg, DATA_SIZE_TYPE msglength)
     {
+        if (!msg || msglength <= 0)
+        {
+            std::cout << errorCode2String(ShmQueErrorCode::QueueParameterInvaild) << std::endl;
+            return (int)(ShmQueErrorCode::QueueParameterInvaild);
+        }
+        // 0.根据访问模式判断是否加锁
+        WLockGuard lock(_tailMtx); // 空不加锁
+        // 1.获取空闲空间大小
+        size_t freeSize = getFreeSize();
+        if (freeSize < msglength + sizeof(DATA_SIZE_TYPE))
+        {
+            // log
+            return (int)(ShmQueErrorCode::QueueNoFreeSize);
+        }
+        // 2.确保了空间足够，开始放数据
+        // 2.1放入固定长度的length字段
+        BYTE *tmpDst = _quePtr;
+        int tmptail = _controlBlock->tailIdx;
+        BYTE *tmpLen = (BYTE *)(&msglength);
+        for (int i = 0; i < sizeof(DATA_SIZE_TYPE); i++)
+        {
+            tmpDst[tmptail] = tmpLen[i];
+            tmptail = (tmptail + 1) & (_controlBlock->queSize-1); // 存长度空间可能在头尾
+        }
+        // 2.2放msg----有两种情况  连续 or 头尾
+        DATA_SIZE_TYPE part1Size = std::min(msglength, _controlBlock->queSize - _controlBlock->tailIdx);
+        memcpy((void *)(tmpDst + tmptail), msg, (size_t)part1Size);
+        DATA_SIZE_TYPE part2Size=msglength-part1Size;
+        if(part2Size>0)
+        {
+            //数据在头尾----直接在队列起始位置放下剩余数据
+            memcpy((void*)(tmpDst),(const void*)((BYTE*)msg+part1Size), (size_t)(part2Size));
+        }
+        //3.数据拷贝完---更新索引位置 [在更新索引位置之前，需要保证数据全部写入完毕，使用写内存屏障保障]
+        sfence();
+        //更新tail索引
+        _controlBlock->tailIdx=(tmptail+msglength) & (_controlBlock->queSize-1);
+        return (int)(ShmQueErrorCode::QueueOk);
     }
     // 取出消息
     int ShmQueue::PopMessage(void *buffer, size_t bufLength)
@@ -114,6 +154,18 @@ namespace xten
         {
             // 多线程pop
             _headMtx = new SemRWMutex(_controlBlock->key + 2);
+        }
+    }
+    // 获取空闲空间大小
+    size_t ShmQueue::getFreeSize()
+    {
+        if (_controlBlock->headIdx <= _controlBlock->tailIdx)
+        {
+            return _controlBlock->queSize - (_controlBlock->tailIdx - _controlBlock->headIdx) - REMAIN_SIZE;
+        }
+        else
+        {
+            return _controlBlock->headIdx - _controlBlock->tailIdx - REMAIN_SIZE;
         }
     }
     // 删除共享内存--detach
@@ -244,7 +296,7 @@ namespace xten
         if (key == -1)
         {
             // 生成key失败
-            std::cout << errorCode2String(ShmQueErrorCode::FailedKey) << std::endl;
+            std::cout << errorCode2String(ShmQueErrorCode::QueueFailedKey) << std::endl;
             return nullptr;
         }
         // 2.获取共享内存
@@ -256,7 +308,7 @@ namespace xten
         if (shmPtr == nullptr)
         {
             // 获取失败
-            std::cout << errorCode2String(ShmQueErrorCode::FailedSharedMemory) << std::endl;
+            std::cout << errorCode2String(ShmQueErrorCode::QueueFailedSharedMemory) << std::endl;
             return nullptr;
         }
         // 3.创建该消息队列---分情况调用不同构造函数

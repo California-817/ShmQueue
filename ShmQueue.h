@@ -48,13 +48,16 @@ namespace xten
     enum class ShmQueErrorCode
     {
         QueueOk = 0,             // 无错误
-        FailedKey = -1,          // 生成key失败
-        FailedSharedMemory = -2, // 获取共享内存失败
+        QueueFailedKey = -1,          // 生成key失败
+        QueueFailedSharedMemory = -2, // 获取共享内存失败
+        QueueParameterInvaild=-3, //参数错误
+        QueueNoFreeSize=-4, //无剩余空间
     };
     class ALIGNED_CACHELINE_SIZE ShmQueue : public nocopyable
     {
-    public:
+    private:
         // 这个共享内存消息队列对应的头部控制块---记录一些信息
+        // 1) 这里读写索引用int类型,cpu可以保证对float,double和long除外的基本类型的读写是原子的,保证一个线程不会读到另外一个线程写到一半的值
         struct ShmQueControlBlock
         {
             volatile int headIdx = 0;               // 队列头部索引
@@ -114,6 +117,8 @@ namespace xten
         static bool destroySharedMemory(void *shmPtr, key_t key);
         // 根据访问模式决定锁的init
         void initLock();
+        // 获取空闲空间的大小
+        size_t getFreeSize();
     private:
         ShmQueControlBlock *_controlBlock; // 头部控制块地址
         void *_shmPtr;                     // 共享内存起始地址
