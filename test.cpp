@@ -11,10 +11,10 @@ static int tmp = 0;
 static std::atomic_ulong count = 0;
 void test()
 {
-    // 4线程
+    // 5线程
     xten::ShmQueue::ptr shmque = xten::ShmQueue::GetShmQueuePtr("/tmp", 100, 64, xten::EnumVisitModel::MulitPushMulitPop);
     assert(shmque);
-    // 生产数据
+    // 生产数据--2thread
     std::thread t1 = std::thread([]()
                                  {
     xten::ShmQueue::ptr shmque = xten::ShmQueue::GetShmQueuePtr("/tmp", 100, 64, xten::EnumVisitModel::MulitPushMulitPop);
@@ -41,6 +41,7 @@ void test()
       if(0==shmque->PushMessage(msg.c_str(),msg.length()))
         i++;
   } });
+  //消费数据--3thread
     std::thread t3 = std::thread([]()
                                  {
     xten::ShmQueue::ptr shmque = xten::ShmQueue::GetShmQueuePtr("/tmp", 100, 64, xten::EnumVisitModel::MulitPushMulitPop);
@@ -83,6 +84,7 @@ void test()
                 break;
             }
         } });
+    //等待5s，让前4个线程先进行生产消费，再启动这个消费线程，模拟启动队列后再添加生产或消费者的情况
     sleep(5);
     std::thread t5 = std::thread([]()
                                  {
@@ -110,6 +112,7 @@ void test()
     t3.join();
     t4.join();
     t5.join();
+    //确保消息没有丢失
     std::cout << "count=" << count << std::endl;
 }
 int main()
