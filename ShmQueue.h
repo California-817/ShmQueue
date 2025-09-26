@@ -47,14 +47,14 @@ namespace xten
     // 这个消息队列的一些错误码
     enum class ShmQueErrorCode
     {
-        QueueOk = 0,             // 无错误
-        QueueFailedKey = -1,          // 生成key失败
-        QueueFailedSharedMemory = -2, // 获取共享内存失败
-        QueueParameterInvaild=-3, //参数错误
-        QueueNoFreeSize=-4, //无剩余空间
-        QueueDataError=-5, //数据长度字段不足
-        QueueDataLengthError=-6, //数据长度字段有错
-        QueueBufferLengthInsufficient=-7, //获取消息时缓冲区长度不足
+        QueueOk = 0,                        // 无错误
+        QueueFailedKey = -1,                // 生成key失败
+        QueueFailedSharedMemory = -2,       // 获取共享内存失败
+        QueueParameterInvaild = -3,         // 参数错误
+        QueueNoFreeSize = -4,               // 无剩余空间
+        QueueDataError = -5,                // 数据长度字段不足
+        QueueDataLengthError = -6,          // 数据长度字段有错
+        QueueBufferLengthInsufficient = -7, // 获取消息时缓冲区长度不足
     };
     class ALIGNED_CACHELINE_SIZE ShmQueue : public nocopyable
     {
@@ -80,9 +80,11 @@ namespace xten
         typedef std::shared_ptr<ShmQueue> ptr;
 
         // 获取一个进程安全共享内存消息队列实例(非单例)---智能指针
+        // queSize会被对齐到2的n次幂
         static std::shared_ptr<ShmQueue> GetShmQueuePtr(const std::string &pathname, int proj_id,
                                                         size_t quesize, EnumVisitModel visitModule = EnumVisitModel::MulitPushMulitPop);
         // 获取一个进程安全共享内存消息队列实例(非单例)---裸指针
+        // queSize会被对齐到2的n次幂
         static ShmQueue *GetShmQueue(const std::string &pathname, int proj_id,
                                      size_t quesize, EnumVisitModel visitModule = EnumVisitModel::MulitPushMulitPop);
 
@@ -109,6 +111,7 @@ namespace xten
         int DelHeadMessage();
         // 打印共享内存消息队列的属性信息
         std::string PrintShmQueInfo() const;
+
     private:
         ShmQueue(key_t key, size_t quesize, int shmId, void *shmPtr,
                  EnumCreateModel newOrLink, EnumVisitModel visitModule = EnumVisitModel::MulitPushMulitPop);
@@ -124,6 +127,7 @@ namespace xten
         size_t getFreeSize() const;
         // 获取数据大小
         size_t getDataSize() const;
+
     private:
         ShmQueControlBlock *_controlBlock; // 头部控制块地址
         void *_shmPtr;                     // 共享内存起始地址
@@ -134,6 +138,6 @@ namespace xten
 
         EnumCreateModel _newOrLink; // 创建或者链接
     };
-    std::ostream& operator<<(std::ostream& os,const ShmQueue& queue);
+    std::ostream &operator<<(std::ostream &os, const ShmQueue &queue);
 } // namespace xten
 #endif

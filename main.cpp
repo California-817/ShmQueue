@@ -53,7 +53,9 @@ int main()
     x1->PopMessage(buffer,sizeof(buffer));
     int ret3=x1->PushMessage("duck",4);
     std::cout<<*x1<<std::endl;
-    std::cout<<ret1<<ret2<<ret3<<std::endl;
+    int ret4=x1->PeekHeadMessage(buffer,sizeof(buffer));
+    std::cout<<ret1<<ret2<<ret3<<ret4<<std::endl;
+    std::cout<<buffer<<std::endl;
     // x1->PopMessage();
     // x1->PeekHeadMessage();
     // x1->DelHeadMessage();

@@ -47,7 +47,7 @@ namespace xten
         }
         return "ShmQueueErrorCode=UnKnown";
     }
-    //访问模式转string
+    // 访问模式转string
     static const char *vtModel2String(EnumVisitModel mod)
     {
         switch (mod)
@@ -123,7 +123,7 @@ namespace xten
         if (freeSize < msglength + sizeof(DATA_SIZE_TYPE))
         {
             // log
-            std::cout<<"PushMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueNoFreeSize);
+            std::cout << "PushMessage failed ," << errorCode2String(ShmQueErrorCode::QueueNoFreeSize);
             return (int)(ShmQueErrorCode::QueueNoFreeSize);
         }
         // 2.确保了空间足够，开始放数据
@@ -171,9 +171,9 @@ namespace xten
         {
             // 数据长度小于存储长度的固定字段
             //  log
-            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueDataError);
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueDataError);
             // 打印一下队列的info
-            std::cout<<PrintShmQueInfo();
+            std::cout << PrintShmQueInfo();
             // 修复一下错误---清空数据进行修复
             _controlBlock->headIdx = _controlBlock->tailIdx;
             return (int)(ShmQueErrorCode::QueueDataError);
@@ -192,9 +192,9 @@ namespace xten
         if (tmpLength <= 0 || tmpLength > dataSize - sizeof(DATA_SIZE_TYPE))
         {
             // log
-            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueDataLengthError);
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueDataLengthError);
             // 打印队列信息
-            std::cout<<PrintShmQueInfo();
+            std::cout << PrintShmQueInfo();
             // 非法长度---清空数据进行修复
             _controlBlock->headIdx = _controlBlock->tailIdx;
             return (int)(ShmQueErrorCode::QueueDataLengthError);
@@ -203,7 +203,7 @@ namespace xten
         {
             // 传入缓冲区大小不足
             // log
-            std::cout<<"PopMessage failed ,"<<errorCode2String(ShmQueErrorCode::QueueBufferLengthInsufficient);
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueBufferLengthInsufficient);
             return (int)(ShmQueErrorCode::QueueBufferLengthInsufficient);
         }
         // 缓冲区大小足够---开始获取data
@@ -224,10 +224,73 @@ namespace xten
     // 获取消息拷贝---不改变索引位置
     int ShmQueue::PeekHeadMessage(void *buffer, size_t bufLength)
     {
+        if (!buffer || bufLength <= 0)
+        {
+            std::cout << errorCode2String(ShmQueErrorCode::QueueParameterInvaild) << std::endl;
+            return (int)(ShmQueErrorCode::QueueParameterInvaild);
+        }
+        // 锁
+        WLockGuard lock(_headMtx);
+        size_t dataSize = getDataSize();
+        if (dataSize == 0)
+        {
+            // 没有数据
+            return (int)(ShmQueErrorCode::QueueOk);
+        }
+        if (dataSize <= sizeof(DATA_SIZE_TYPE))
+        {
+            // 数据长度小于存储长度的固定字段
+            //  log
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueDataError);
+            // 打印一下队列的info
+            std::cout << PrintShmQueInfo();
+            // 修复一下错误---清空数据进行修复
+            _controlBlock->headIdx = _controlBlock->tailIdx;
+            return (int)(ShmQueErrorCode::QueueDataError);
+        }
+        // 1.拿到长度字段
+        DATA_SIZE_TYPE tmpLength;
+        BYTE *tmpSrc = _quePtr;
+        int tmphead = _controlBlock->headIdx;
+        for (int i = 0; i < sizeof(DATA_SIZE_TYPE); i++)
+        {
+            // 生产消费一定在同一台主机上---不需要考虑大小端问题
+            ((BYTE *)(&tmpLength))[i] = tmpSrc[tmphead];
+            tmphead = (tmphead + 1) & (_controlBlock->queSize - 1); // 可能在头尾
+        }
+        // 2.判断长度字段是否合法
+        if (tmpLength <= 0 || tmpLength > dataSize - sizeof(DATA_SIZE_TYPE))
+        {
+            // log
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueDataLengthError);
+            // 打印队列信息
+            std::cout << PrintShmQueInfo();
+            // 非法长度---清空数据进行修复
+            _controlBlock->headIdx = _controlBlock->tailIdx;
+            return (int)(ShmQueErrorCode::QueueDataLengthError);
+        }
+        if (tmpLength > bufLength)
+        {
+            // 传入缓冲区大小不足
+            // log
+            std::cout << "PopMessage failed ," << errorCode2String(ShmQueErrorCode::QueueBufferLengthInsufficient);
+            return (int)(ShmQueErrorCode::QueueBufferLengthInsufficient);
+        }
+        // 缓冲区大小足够---开始获取data
+        DATA_SIZE_TYPE part1Size = std::min(tmpLength, _controlBlock->queSize - _controlBlock->headIdx);
+        memcpy(buffer, (const void *)(tmpSrc + tmphead), (size_t)part1Size);
+        DATA_SIZE_TYPE part2Size = tmpLength - part1Size;
+        if (part2Size > 0)
+        {
+            // 数据分布在头尾
+            memcpy((void *)((BYTE *)(buffer) + part1Size), (const void *)(tmpSrc), part2Size);
+        }
+        return tmpLength;
     }
     // 删除头部消息---改变索引位置
     int ShmQueue::DelHeadMessage()
     {
+        
     }
     // 根据访问模式决定锁的init
     void ShmQueue::initLock()
